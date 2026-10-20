@@ -3,7 +3,13 @@ let originData = null;
 let destData = null;
 let pendingLandmarkPos = null;
 let currentViewLandmarkId = null;
+let tripsCache = [];
+let favoritesCache = [];
 const searchTimers = {};
+
+function firstName(text) {
+    return String(text || '').split(',')[0].trim();
+}
 
 // NOTIFICATIONS
 function showNotification(message, type = 'success') {
@@ -86,7 +92,7 @@ function setupBackToTop() {
     });
 }
 
-// AUTH NAV
+// AUTH NAV (state comes from the server session, see auth.js)
 function updateNavAuth() {
     const user = Auth.getCurrentUser();
     const areas = [
@@ -113,12 +119,23 @@ function updateNavAuth() {
     }
 }
 
-function doLogout() {
-    Auth.logout();
+async function doLogout() {
+    try {
+        await Auth.logout();
+    } catch (err) {
+        showNotification(API.describe(err), 'error');
+        return;
+    }
     showNotification('Logged out. See you soon!', 'info');
     updateNavAuth();
+    DataManager.reset();
+    tripsCache = [];
+    favoritesCache = [];
     if (typeof renderSavedLandmarks === 'function') renderSavedLandmarks();
-    if (typeof renderLandmarksList === 'function') renderLandmarksList();
+    renderLandmarksList();
+    renderTripsList();
+    renderFavoritesList();
+    closeAllPanels();
 }
 
 // MODAL HELPERS
@@ -138,6 +155,7 @@ function setupEscKey() {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal-overlay.open')
                     .forEach(m => closeModal(m.id));
+            closeAllPanels();
         }
     });
 }
@@ -167,9 +185,9 @@ function setupSearchInput(inputId, dropdownId, onSelect) {
                 '<div class="search-dropdown-item"' +
                 ' data-lat="' + r.lat + '"' +
                 ' data-lng="' + r.lng + '"' +
-                ' data-name="' + r.name.replace(/"/g, '&quot;') + '">' +
+                ' data-name="' + escapeHtml(r.name) + '">' +
                 '<i class="fi fi-rr-marker item-icon" aria-hidden="true"></i>' +
-                '<span>' + r.name + '</span>' +
+                '<span>' + escapeHtml(r.name) + '</span>' +
                 '</div>'
             ).join('');
             dropdown.querySelectorAll('.search-dropdown-item').forEach(item => {
@@ -198,127 +216,200 @@ function setupSearchInput(inputId, dropdownId, onSelect) {
 function setupCalcListeners() {
     setupSearchInput('origin-input', 'origin-dropdown', loc => {
         originData = loc;
-        setOriginMarker(loc.lat, loc.lng, loc.name.split(',')[0]);
-        tryCalculateFare();
+        setOriginMarker(loc.lat, loc.lng, firstName(loc.name));
+        refreshFareCalculation();
     });
     setupSearchInput('dest-input', 'dest-dropdown', loc => {
         destData = loc;
-        setDestinationMarker(loc.lat, loc.lng, loc.name.split(',')[0]);
-        tryCalculateFare();
+        setDestinationMarker(loc.lat, loc.lng, firstName(loc.name));
+        refreshFareCalculation();
     });
-    document.getElementById('swap-btn')?.addEventListener('click', () => {
+
+    $('#swap-btn').on('click', () => {
         [originData, destData] = [destData, originData];
-        const oInput = document.getElementById('origin-input');
-        const dInput = document.getElementById('dest-input');
-        [oInput.value, dInput.value] = [dInput.value, oInput.value];
-        if (originData) setOriginMarker(originData.lat, originData.lng, originData.name.split(',')[0]);
-        if (destData) setDestinationMarker(destData.lat, destData.lng, destData.name.split(',')[0]);
-        tryCalculateFare();
+        const $o = $('#origin-input');
+        const $d = $('#dest-input');
+        const tmp = $o.val();
+        $o.val($d.val());
+        $d.val(tmp);
+        if (originData) setOriginMarker(originData.lat, originData.lng, firstName(originData.name));
+        if (destData) setDestinationMarker(destData.lat, destData.lng, firstName(destData.name));
+        refreshFareCalculation();
     });
-    document.getElementById('transport-select')?.addEventListener('change', tryCalculateFare);
-    document.getElementById('passenger-select')?.addEventListener('change', tryCalculateFare);
-    const landmarksBtn = document.getElementById('landmarks-toggle-btn');
-    const landmarksPanel = document.getElementById('landmarks-panel');
-    landmarksBtn?.addEventListener('click', function () {
-        const isOpen = landmarksPanel.classList.toggle('open');
-        this.setAttribute('aria-expanded', isOpen);
-        if (isOpen) {
-            renderLandmarksList();
-            document.getElementById('landmarks-search')?.focus();
-        }
-    });
-    document.getElementById('landmarks-search')?.addEventListener('input', function () {
-        renderLandmarksList(this.value.trim().toLowerCase());
-    });
-    document.addEventListener('click', e => {
-        const panel = document.getElementById('landmarks-panel');
-        const btn = document.getElementById('landmarks-toggle-btn');
-        if (panel && btn && !panel.contains(e.target) && !btn.contains(e.target)) {
-            panel.classList.remove('open');
-        }
-    });
+
+    $('#transport-select, #passenger-select').on('change', refreshFareCalculation);
+
+    setupPanels();
+    setupLandmarkList();
+    setupTrips();
+    setupFavorites();
 }
 
-// FARE CALCULATION
-async function tryCalculateFare() {
-    const transport = document.getElementById('transport-select')?.value;
-    const passenger = document.getElementById('passenger-select')?.value;
-    const hintEl = document.getElementById('para-hint-text');
-    const resultCard = document.getElementById('result-card');
-    const paraHint = document.getElementById('para-hint');
+// FARE CALCULATION (the server does the maths: api/calculate.php)
+let fareTimer = null;
+let fareRequestId = 0;
+let lastWarnKey = '';
+
+// Debounced, so swap/select changes that fire several updates only cause one request
+function refreshFareCalculation() {
+    clearTimeout(fareTimer);
+    fareTimer = setTimeout(runFareCalculation, 150);
+}
+
+function setResultVisible(visible) {
+    $('#result-card').toggleClass('active', visible);
+    $('#para-hint').css('display', visible ? 'none' : 'flex');
+}
+
+async function runFareCalculation() {
+    if (!$('#result-card').length) return;
+    const transport = $('#transport-select').val();
+    const passenger = $('#passenger-select').val();
+    const $hint = $('#para-hint-text');
+
     if (!originData || !destData) {
-        if (hintEl) hintEl.innerHTML = '<strong>Select an origin and destination to see the fare!</strong>';
-        resultCard?.classList.remove('active');
-        if (paraHint) paraHint.style.display = 'flex';
+        $hint.html('<strong>Select an origin and destination to see the fare!</strong>');
+        setResultVisible(false);
         return;
     }
     if (!transport || !passenger) {
-        if (hintEl) hintEl.innerHTML = '<strong>Now choose a transport type and passenger type!</strong>';
-        resultCard?.classList.remove('active');
-        if (paraHint) paraHint.style.display = 'flex';
+        $hint.html('<strong>Now choose a transport type and passenger type!</strong>');
+        setResultVisible(false);
         return;
     }
-    if (hintEl) hintEl.textContent = 'Calculating your fare...';
-    const distKm = haversineDistance(
-        originData.lat, originData.lng,
-        destData.lat, destData.lng
-    );
-    if (distKm > 8) {
-        showNotification('Far destination! A Tricycle Special Trip may be needed.', 'warning');
+
+    const myId = ++fareRequestId;
+    $hint.text('Calculating your fare...');
+    try {
+        const fare = await fetchFare(originData, destData, transport, passenger);
+        if (myId !== fareRequestId) return;       // a newer request replaced this one
+
+        $('#res-origin').text(firstName(originData.name));
+        $('#res-dest').text(firstName(destData.name));
+        $('#res-distance').text(fare.distance + ' km');
+        $('#res-eta').text('~' + fare.durationMin + ' min (arrive ~' + fare.arrivalTime + ')');
+        $('#res-base').text('₱' + fare.baseFare);
+        $('#res-excess').text('₱' + fare.excessFare);
+        $('#res-ptype').text(fare.passengerType);
+        $('#res-discount').text(fare.discountRate > 0
+            ? '-₱' + fare.discountAmount + ' (' + fare.discountRate + '% off)'
+            : 'None');
+        $('#res-total').text('₱' + fare.total);
+        setResultVisible(true);
+
+        const key = [originData.lat, originData.lng, destData.lat, destData.lng].join(',');
+        if (fare.farDestination && key !== lastWarnKey) {
+            showNotification('Far destination! A Tricycle Special Trip may be needed.', 'warning');
+        }
+        lastWarnKey = fare.farDestination ? key : '';
+    } catch (err) {
+        if (myId !== fareRequestId) return;
+        setResultVisible(false);
+        $hint.text('Could not calculate the fare. ' + API.describe(err));
+        showNotification(API.describe(err), 'error');
     }
-    const result = await calculateFare(distKm, transport, passenger);
-    if (!result) {
-        if (hintEl) hintEl.textContent = 'Could not load fare data. Check your connection.';
-        return;
-    }
-    document.getElementById('res-origin').textContent = originData.name.split(',')[0];
-    document.getElementById('res-dest').textContent = destData.name.split(',')[0];
-    document.getElementById('res-distance').textContent = result.distance + ' km';
-    document.getElementById('res-base').textContent = '₱' + result.baseFare;
-    document.getElementById('res-excess').textContent = '₱' + result.excessFare;
-    document.getElementById('res-ptype').textContent = result.passengerType;
-    document.getElementById('res-discount').textContent = result.discountRate > 0
-        ? '-₱' + result.discountAmount + ' (' + result.discountRate + '% off)'
-        : 'None';
-    document.getElementById('res-total').textContent = '₱' + result.total;
-    resultCard?.classList.add('active');
-    if (paraHint) paraHint.style.display = 'none';
+}
+
+// The route currently on screen, in the shape the backend expects (or null if incomplete)
+function getCurrentRoute() {
+    const transport = $('#transport-select').val();
+    const passenger = $('#passenger-select').val();
+    if (!originData || !destData || !transport || !passenger) return null;
+    return {
+        originName: firstName(originData.name), originLat: originData.lat, originLng: originData.lng,
+        destName: firstName(destData.name), destLat: destData.lat, destLng: destData.lng,
+        transport: transport, passenger: passenger
+    };
+}
+
+// Loads a saved trip / favorite back onto the map and the dropdowns
+function applySavedRoute(r) {
+    originData = { name: r.originName, lat: r.originLat, lng: r.originLng };
+    destData = { name: r.destName, lat: r.destLat, lng: r.destLng };
+    $('#origin-input').val(r.originName);
+    $('#dest-input').val(r.destName);
+    $('#transport-select').val(r.transport);
+    $('#passenger-select').val(r.passenger);
+    setOriginMarker(originData.lat, originData.lng, firstName(originData.name));
+    setDestinationMarker(destData.lat, destData.lng, firstName(destData.name));
+    refreshFareCalculation();
+}
+
+// DROPDOWN PANELS (Favorites / Recent Trips / My Landmarks)
+function closeAllPanels() {
+    $('.landmarks-panel').removeClass('open');
+    $('.overlay-item > button').attr('aria-expanded', 'false');
+}
+
+function setupPanels() {
+    const panels = [
+        { btn: '#favorites-toggle-btn', panel: '#favorites-panel', onOpen: loadFavorites },
+        { btn: '#trips-toggle-btn', panel: '#trips-panel', onOpen: loadTrips },
+        { btn: '#landmarks-toggle-btn', panel: '#landmarks-panel', onOpen: () => {
+            renderLandmarksList();
+            $('#landmarks-search').trigger('focus');
+        } }
+    ];
+    panels.forEach(p => {
+        $(p.btn).on('click', function (e) {
+            e.stopPropagation();
+            const willOpen = !$(p.panel).hasClass('open');
+            closeAllPanels();
+            if (willOpen) {
+                $(p.panel).addClass('open');
+                $(this).attr('aria-expanded', 'true');
+                p.onOpen();
+            }
+        });
+    });
+    $(document).on('click', e => {
+        if (!$(e.target).closest('.overlay-item').length) closeAllPanels();
+    });
 }
 
 // LANDMARKS LIST
+function setupLandmarkList() {
+    $('#landmarks-search').on('input', function () {
+        renderLandmarksList(this.value.trim().toLowerCase());
+    });
+    $('#landmarks-list').on('click', '.landmark-list-item', function (e) {
+        e.stopPropagation();
+        onLandmarkListClick($(this).data('id'));
+    });
+}
+
 function renderLandmarksList(filter = '') {
-    const listEl = document.getElementById('landmarks-list');
-    if (!listEl) return;
+    const $list = $('#landmarks-list');
+    if (!$list.length) return;
     if (!Auth.isLoggedIn()) {
-        listEl.innerHTML = '<div class="lm-empty">Please <a href="auth.html">log in</a> to save landmarks.</div>';
+        $list.html('<div class="lm-empty">Please <a href="auth.html">log in</a> to save landmarks.</div>');
         return;
     }
-    const landmarks = DataManager.getLandmarks();
+    const all = DataManager.getLandmarks();
     const filtered = filter
-        ? landmarks.filter(lm =>
-            lm.name.toLowerCase().includes(filter) ||
-            lm.category.toLowerCase().includes(filter))
-        : landmarks;
+        ? all.filter(lm => lm.name.toLowerCase().includes(filter) || lm.category.toLowerCase().includes(filter))
+        : all;
     if (!filtered.length) {
-        listEl.innerHTML = '<div class="lm-empty">No landmarks yet.<br>Right-click the map to add one!</div>';
+        $list.html('<div class="lm-empty">No landmarks yet.<br>Right-click the map to add one!</div>');
         return;
     }
-    listEl.innerHTML = filtered.map(lm =>
-        '<div class="landmark-list-item" onclick="onLandmarkListClick(\'' + lm.id + '\')">' +
-        '<i class="fi fi-rr-marker lm-icon" aria-hidden="true"></i>' +
-        '<div class="lm-info">' +
-        '<h5>' + lm.name + '</h5>' +
-        '<span>' + lm.category + '</span>' +
-        '</div>' +
-        '</div>'
-    ).join('');
+    $list.empty();
+    filtered.forEach(lm => {
+        $('<div class="landmark-list-item">').attr('data-id', lm.id).append(
+            '<i class="fi fi-rr-marker lm-icon" aria-hidden="true"></i>',
+            $('<div class="lm-info">').append(
+                $('<h5>').text(lm.name),
+                $('<span>').text(lm.category)
+            )
+        ).appendTo($list);
+    });
 }
 
 function onLandmarkListClick(id) {
     const lm = DataManager.getLandmark(id);
     if (!lm) return;
     panToLandmark(lm);
-    document.getElementById('landmarks-panel')?.classList.remove('open');
+    closeAllPanels();
     openViewLandmarkModal(id);
 }
 
@@ -331,7 +422,7 @@ function openAddLandmarkModal(lat, lng) {
     openModal('add-landmark-modal');
 }
 
-function submitAddLandmark() {
+async function submitAddLandmark() {
     const name = document.getElementById('lm-name')?.value.trim();
     const category = document.getElementById('lm-category')?.value;
     const desc = document.getElementById('lm-desc')?.value.trim();
@@ -340,19 +431,23 @@ function submitAddLandmark() {
         return;
     }
     if (!pendingLandmarkPos) return;
-    const lm = DataManager.addLandmark(name, category, desc, pendingLandmarkPos.lat, pendingLandmarkPos.lng);
-    addLandmarkMarker(lm);
-    renderLandmarksList();
-    closeModal('add-landmark-modal');
-    showNotification('"' + name + '" added to your landmarks!', 'success');
-    pendingLandmarkPos = null;
+    try {
+        const lm = await DataManager.addLandmark(name, category, desc, pendingLandmarkPos.lat, pendingLandmarkPos.lng);
+        addLandmarkMarker(lm);
+        renderLandmarksList();
+        closeModal('add-landmark-modal');
+        showNotification('"' + name + '" added to your landmarks!', 'success');
+        pendingLandmarkPos = null;
+    } catch (err) {
+        showNotification(API.describe(err), 'error');
+    }
 }
 
 // VIEW LANDMARK
 function openViewLandmarkModal(id) {
     const lm = DataManager.getLandmark(id);
     if (!lm) return;
-    currentViewLandmarkId = id;
+    currentViewLandmarkId = lm.id;
     document.getElementById('view-lm-name').textContent = lm.name;
     document.getElementById('view-lm-category').textContent =
         lm.category.charAt(0).toUpperCase() + lm.category.slice(1);
@@ -360,15 +455,21 @@ function openViewLandmarkModal(id) {
     openModal('view-landmark-modal');
 }
 
-function deleteLandmarkConfirm() {
+async function deleteLandmarkConfirm() {
     if (!currentViewLandmarkId) return;
-    const lm = DataManager.getLandmark(currentViewLandmarkId);
+    const id = currentViewLandmarkId;
+    const lm = DataManager.getLandmark(id);
     const name = lm ? lm.name : 'this landmark';
-    if (typeof landmarkMarkers !== 'undefined' && landmarkMarkers[currentViewLandmarkId]) {
-        map.removeLayer(landmarkMarkers[currentViewLandmarkId]);
-        delete landmarkMarkers[currentViewLandmarkId];
+    try {
+        await DataManager.deleteLandmark(id);
+    } catch (err) {
+        showNotification(API.describe(err), 'error');
+        return;
     }
-    DataManager.deleteLandmark(currentViewLandmarkId);
+    if (landmarkMarkers[id]) {
+        map.removeLayer(landmarkMarkers[id]);
+        delete landmarkMarkers[id];
+    }
     renderLandmarksList();
     closeModal('view-landmark-modal');
     showNotification('"' + name + '" deleted.', 'info');
@@ -388,7 +489,7 @@ function openEditLandmark() {
     openModal('edit-landmark-modal');
 }
 
-function submitEditLandmark() {
+async function submitEditLandmark() {
     const id = document.getElementById('edit-lm-id')?.value;
     const name = document.getElementById('edit-lm-name')?.value.trim();
     const category = document.getElementById('edit-lm-category')?.value;
@@ -397,8 +498,13 @@ function submitEditLandmark() {
         showNotification('Please enter a landmark name.', 'warning');
         return;
     }
-    DataManager.updateLandmark(id, name, category, desc);
-    if (typeof landmarkMarkers !== 'undefined' && landmarkMarkers[id]) {
+    try {
+        await DataManager.updateLandmark(id, name, category, desc);
+    } catch (err) {
+        showNotification(API.describe(err), 'error');
+        return;
+    }
+    if (landmarkMarkers[id]) {
         map.removeLayer(landmarkMarkers[id]);
         delete landmarkMarkers[id];
     }
@@ -409,6 +515,200 @@ function submitEditLandmark() {
     showNotification('"' + name + '" updated!', 'success');
 }
 
+// RECENT TRIPS (api/trips/*.php)
+function setupTrips() {
+    $('#save-trip-btn').on('click', async function () {
+        if (!Auth.isLoggedIn()) {
+            showNotification('Log in to save trips.', 'warning');
+            return;
+        }
+        const route = getCurrentRoute();
+        if (!route) return;
+        const $btn = $(this).prop('disabled', true);
+        try {
+            await API.post('trips/add.php', route);
+            showNotification('Trip saved to your history!', 'success');
+            if ($('#trips-panel').hasClass('open')) loadTrips();
+        } catch (err) {
+            showNotification(API.describe(err), 'error');
+        } finally {
+            $btn.prop('disabled', false);
+        }
+    });
+
+    $('#trips-list').on('click', '.item-del', async function (e) {
+        e.stopPropagation();
+        const id = $(this).closest('.landmark-list-item').data('id');
+        try {
+            await API.post('trips/delete.php', { id });
+            tripsCache = tripsCache.filter(t => t.id !== id);
+            renderTripsList();
+            showNotification('Trip removed.', 'info');
+        } catch (err) {
+            showNotification(API.describe(err), 'error');
+        }
+    });
+
+    $('#trips-list').on('click', '.landmark-list-item', function (e) {
+        e.stopPropagation();
+        const trip = tripsCache.find(t => t.id === $(this).data('id'));
+        if (trip) {
+            applySavedRoute(trip);
+            closeAllPanels();
+            showNotification('Trip loaded. The fare was recalculated with current rates.', 'info');
+        }
+    });
+
+    $('#trips-clear-btn').on('click', async function (e) {
+        e.stopPropagation();
+        if (!tripsCache.length) return;
+        if (!window.confirm('Clear all of your trip history?')) return;
+        try {
+            await API.post('trips/clear.php');
+            tripsCache = [];
+            renderTripsList();
+            showNotification('Trip history cleared.', 'info');
+        } catch (err) {
+            showNotification(API.describe(err), 'error');
+        }
+    });
+}
+
+async function loadTrips() {
+    if (!$('#trips-list').length) return;
+    if (!Auth.isLoggedIn()) { tripsCache = []; renderTripsList(); return; }
+    try {
+        const res = await API.get('trips/list.php');
+        tripsCache = res.trips;
+        renderTripsList();
+    } catch (err) {
+        $('#trips-list').html('<div class="lm-empty">Could not load your trips.</div>');
+        showNotification(API.describe(err), 'error');
+    }
+}
+
+function renderTripsList() {
+    const $list = $('#trips-list');
+    if (!$list.length) return;
+    if (!Auth.isLoggedIn()) {
+        $list.html('<div class="lm-empty">Please <a href="auth.html">log in</a> to see your recent trips.</div>');
+        return;
+    }
+    if (!tripsCache.length) {
+        $list.html('<div class="lm-empty">No saved trips yet.<br>Calculate a fare, then press "Save trip".</div>');
+        return;
+    }
+    $list.empty();
+    tripsCache.forEach(t => {
+        const detail = t.transportLabel + ' · ' + t.passengerLabel + ' · ₱' + t.totalFare.toFixed(2)
+            + ' · ' + t.durationMin + ' min · ' + String(t.createdAt).slice(0, 10);
+        $('<div class="landmark-list-item">').attr('data-id', t.id).append(
+            '<i class="fi fi-rr-time-past lm-icon" aria-hidden="true"></i>',
+            $('<div class="lm-info">').append(
+                $('<h5>').text(firstName(t.originName) + ' → ' + firstName(t.destName)),
+                $('<span>').text(detail)
+            ),
+            $('<button type="button" class="item-del" title="Remove" aria-label="Remove trip">').text('×')
+        ).appendTo($list);
+    });
+}
+
+// FAVORITE ROUTES (api/favorites/*.php)
+function setupFavorites() {
+    $('#fav-btn').on('click', () => {
+        if (!Auth.isLoggedIn()) {
+            showNotification('Log in to save favorite routes.', 'warning');
+            return;
+        }
+        const route = getCurrentRoute();
+        if (!route) return;
+        $('#fav-label').val((route.originName + ' → ' + route.destName).slice(0, 100));
+        $('#fav-label-error').text('');
+        openModal('add-favorite-modal');
+        $('#fav-label').trigger('focus').trigger('select');
+    });
+
+    $('#fav-save-btn').on('click', async function () {
+        const label = $('#fav-label').val().trim();
+        if (!label) { $('#fav-label-error').text('Label is required.'); return; }
+        const route = getCurrentRoute();
+        if (!route) { closeModal('add-favorite-modal'); return; }
+        const $btn = $(this).prop('disabled', true);
+        try {
+            await API.post('favorites/add.php', Object.assign({ label }, route));
+            closeModal('add-favorite-modal');
+            showNotification('Added to your favorites!', 'success');
+            if ($('#favorites-panel').hasClass('open')) loadFavorites();
+        } catch (err) {
+            $('#fav-label-error').text(API.describe(err));
+        } finally {
+            $btn.prop('disabled', false);
+        }
+    });
+
+    $('#fav-label').on('keydown', e => { if (e.key === 'Enter') $('#fav-save-btn').trigger('click'); });
+
+    $('#favorites-list').on('click', '.item-del', async function (e) {
+        e.stopPropagation();
+        const id = $(this).closest('.landmark-list-item').data('id');
+        try {
+            await API.post('favorites/delete.php', { id });
+            favoritesCache = favoritesCache.filter(f => f.id !== id);
+            renderFavoritesList();
+            showNotification('Favorite removed.', 'info');
+        } catch (err) {
+            showNotification(API.describe(err), 'error');
+        }
+    });
+
+    $('#favorites-list').on('click', '.landmark-list-item', function (e) {
+        e.stopPropagation();
+        const fav = favoritesCache.find(f => f.id === $(this).data('id'));
+        if (fav) {
+            applySavedRoute(fav);
+            closeAllPanels();
+        }
+    });
+}
+
+async function loadFavorites() {
+    if (!$('#favorites-list').length) return;
+    if (!Auth.isLoggedIn()) { favoritesCache = []; renderFavoritesList(); return; }
+    try {
+        const res = await API.get('favorites/list.php');
+        favoritesCache = res.favorites;
+        renderFavoritesList();
+    } catch (err) {
+        $('#favorites-list').html('<div class="lm-empty">Could not load your favorites.</div>');
+        showNotification(API.describe(err), 'error');
+    }
+}
+
+function renderFavoritesList() {
+    const $list = $('#favorites-list');
+    if (!$list.length) return;
+    if (!Auth.isLoggedIn()) {
+        $list.html('<div class="lm-empty">Please <a href="auth.html">log in</a> to see your favorite routes.</div>');
+        return;
+    }
+    if (!favoritesCache.length) {
+        $list.html('<div class="lm-empty">No favorites yet.<br>Calculate a fare, then press the star.</div>');
+        return;
+    }
+    $list.empty();
+    favoritesCache.forEach(f => {
+        $('<div class="landmark-list-item">').attr('data-id', f.id).append(
+            '<i class="fi fi-rr-star lm-icon" aria-hidden="true"></i>',
+            $('<div class="lm-info">').append(
+                $('<h5>').text(f.label),
+                $('<span>').text(firstName(f.originName) + ' → ' + firstName(f.destName) + ' · ' + f.transportLabel)
+            ),
+            $('<button type="button" class="item-del" title="Remove" aria-label="Remove favorite">').text('×')
+        ).appendTo($list);
+    });
+}
+
+// PAGE START
 document.addEventListener('DOMContentLoaded', () => {
     applyDarkMode();
     setupDarkToggle();
@@ -417,10 +717,22 @@ document.addEventListener('DOMContentLoaded', () => {
     setupBackToTop();
     setupModalOverlayClose();
     setupEscKey();
-    updateNavAuth();
-    if (document.getElementById('origin-input')) {
+
+    const isCalcPage = !!document.getElementById('origin-input');
+    if (isCalcPage) {
         setupCalcListeners();
         initMap();
-        renderSavedLandmarks();
+        loadFareOptions();
     }
+
+    // Everything that depends on "who is logged in" waits for the server session
+    Auth.ready().then(() => {
+        updateNavAuth();
+        if (isCalcPage) {
+            renderSavedLandmarks();
+            renderLandmarksList();
+            renderTripsList();
+            renderFavoritesList();
+        }
+    });
 });

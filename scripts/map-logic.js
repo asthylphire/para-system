@@ -9,7 +9,7 @@ var map               = null;
 var originMarker      = null;
 var destinationMarker = null;
 var routeLine         = null;
-var landmarkMarkers   = {}; 
+var landmarkMarkers   = {};
 
 const CATEGORY_COLORS = {
   school:   '#3498db',
@@ -56,7 +56,7 @@ function _labelIcon(text, color) {
       border-radius:12px;font-size:11px;font-weight:700;
       white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.22);
       font-family:Poppins,sans-serif;
-    ">${text}</div>`,
+    ">${escapeHtml(text)}</div>`,
     iconAnchor: [0, 22]
   });
 }
@@ -73,6 +73,8 @@ function setDestinationMarker(lat, lng, label) {
   _drawRoute();
 }
 
+// Draws the line between the two markers. The fare itself is computed by the server
+// (see refreshFareCalculation in app.js), so no distance maths is needed here anymore.
 function _drawRoute() {
   if (routeLine) map.removeLayer(routeLine);
   if (!originMarker || !destinationMarker) return;
@@ -88,20 +90,25 @@ function _drawRoute() {
   }).addTo(map);
 
   map.fitBounds(L.latLngBounds([o, d]).pad(0.25));
+  refreshFareCalculation();
 }
 
 // LANDMARK MARKERS
-function renderSavedLandmarks() {
+async function renderSavedLandmarks() {
   if (!map) return;
   Object.values(landmarkMarkers).forEach(m => map.removeLayer(m));
   landmarkMarkers = {};
-  if (!Auth.isLoggedIn()) return;
-  DataManager.getLandmarks().forEach(lm => addLandmarkMarker(lm));
+  if (!Auth.isLoggedIn()) { DataManager.reset(); return; }
+  try {
+    const list = await DataManager.load();
+    list.forEach(lm => addLandmarkMarker(lm));
+  } catch (err) {
+    showNotification(API.describe(err), 'error');
+  }
 }
 
 function addLandmarkMarker(lm) {
   if (!map) return;
-  const color = CATEGORY_COLORS[lm.category] || '#7f8c8d';
   const icon  = L.divIcon({
     className: '',
     html: `<div style="

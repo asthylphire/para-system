@@ -1,55 +1,40 @@
-// DATA MANAGER
+// DATA MANAGER (landmarks). Same job as before, but the data lives in MySQL via api/landmarks/*.php.
+// A small in-memory cache keeps the UI fast; the server is the source of truth.
 const DataManager = {
+    cache: [],
 
-  _key() {
-    const user = Auth.getCurrentUser();
-    return user ? `para_landmarks_${user.id}` : null;
-  },
+    reset() { this.cache = []; },
 
-  getLandmarks() {
-    const key = this._key();
-    if (!key) return [];
-    return JSON.parse(localStorage.getItem(key) || '[]');
-  },
+    async load() {
+        if (!Auth.isLoggedIn()) { this.reset(); return this.cache; }
+        const res = await API.get('landmarks/list.php');
+        this.cache = res.landmarks;
+        return this.cache;
+    },
 
-  saveLandmarks(landmarks) {
-    const key = this._key();
-    if (!key) return;
-    localStorage.setItem(key, JSON.stringify(landmarks));
-  },
+    getLandmarks() { return this.cache; },
 
-  getLandmark(id) {
-    return this.getLandmarks().find(l => l.id === id) || null;
-  },
+    getLandmark(id) {
+        return this.cache.find(l => l.id === Number(id)) || null;
+    },
 
-  addLandmark(name, category, description, lat, lng) {
-    const landmarks = this.getLandmarks();
-    const landmark = {
-      id: 'lm_' + Date.now(),
-      name,
-      category,
-      description,
-      lat,
-      lng,
-      createdAt: new Date().toISOString()
-    };
-    landmarks.push(landmark);
-    this.saveLandmarks(landmarks);
-    return landmark;
-  },
+    async addLandmark(name, category, description, lat, lng) {
+        const res = await API.post('landmarks/add.php', { name, category, description, lat, lng });
+        const lm = res.landmark;
+        this.cache.unshift(lm);
+        return lm;
+    },
 
-  updateLandmark(id, name, category, description) {
-    const landmarks = this.getLandmarks();
-    const idx = landmarks.findIndex(l => l.id === id);
-    if (idx === -1) return false;
-    Object.assign(landmarks[idx], { name, category, description });
-    this.saveLandmarks(landmarks);
-    return true;
-  },
+    async updateLandmark(id, name, category, description) {
+        const res = await API.post('landmarks/update.php', { id: Number(id), name, category, description });
+        const lm = this.getLandmark(id);
+        if (lm) Object.assign(lm, res.landmark);
+        return lm;
+    },
 
-  deleteLandmark(id) {
-    this.saveLandmarks(this.getLandmarks().filter(l => l.id !== id));
-    return true;
-  }
-
+    async deleteLandmark(id) {
+        await API.post('landmarks/delete.php', { id: Number(id) });
+        this.cache = this.cache.filter(l => l.id !== Number(id));
+        return true;
+    }
 };

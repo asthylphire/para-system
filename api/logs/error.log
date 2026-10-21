@@ -101,3 +101,10 @@
 [20-Oct-2026 06:38:01 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
 [20-Oct-2026 06:38:54 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
 [20-Oct-2026 06:38:54 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[20-Oct-2026 11:55:11 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[20-Oct-2026 11:55:28 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[21-Oct-2026 15:39:38 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[21-Oct-2026 15:41:00 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[21-Oct-2026 15:41:02 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[21-Oct-2026 15:41:58 Europe/Berlin] SQLSTATE[HY000] [2002] php_network_getaddresses: getaddrinfo for sql107.infinityfree.com failed: No such host is known.  @ C:\xampp\htdocs\para-web-system\api\config\db.php:11
+[21-Oct-2026 15:45:27 Europe/Berlin] SQLSTATE[HY000] [1045] Access denied for user ''@'localhost' (using password: NO) @ C:\xampp\htdocs\para-web-system\api\config\db.php:11

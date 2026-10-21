@@ -1,9 +1,9 @@
 <?php
 // Database connection (PDO). Edit these 4 constants to match your setup.
-const DB_HOST = 'sql107.infinityfree.com';
-const DB_NAME = 'if0_43221477_para_db';
-const DB_USER = 'if0_43221477';     // limited user, created with create_db_user.sql
-const DB_PASS = 'MxA4sFfieFOYyEt';    // change this in BOTH db.php and create_db_user.sql
+const DB_HOST = 'localhost';
+const DB_NAME = 'para_db';
+const DB_USER = '';     // limited user, created with create_db_user.sql
+const DB_PASS = '';    // change this in BOTH db.php and create_db_user.sql
 
 function db(): PDO {
     static $pdo = null;

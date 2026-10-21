@@ -1,6 +1,7 @@
 <?php
 // POST api/auth/register.php  {name, email, password}
 require_once __DIR__ . '/../helpers.php';
+require_once __DIR__ . '/../config/db.php';
 require_post();
 
 $in       = input();

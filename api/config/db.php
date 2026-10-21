@@ -1,24 +1,13 @@
 <?php
-// Database connection (PDO). Edit these 4 constants to match your setup.
-const DB_HOST = 'localhost';
-const DB_NAME = 'para_db';
-const DB_USER = '';     // limited user, created with create_db_user.sql
-const DB_PASS = '';    // change this in BOTH db.php and create_db_user.sql
+$host     = getenv('DB_HOST') ?: '127.0.0.1';
+$user     = getenv('DB_USER') ?: 'root';
+$password = getenv('DB_PASS') ?: '';
+$database = getenv('DB_NAME') ?: 'para_db';
+$port     = (int)(getenv('DB_PORT') ?: 3306);
 
-function db(): PDO {
-    static $pdo = null;
-    if ($pdo === null) {
-        $pdo = new PDO(
-            'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4',
-            DB_USER,
-            DB_PASS,
-            [
-                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION, // throw on SQL errors
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES   => false,                  // real prepared statements
-                PDO::MYSQL_ATTR_FOUND_ROWS   => true,                   // rowCount() = rows matched
-            ]
-        );
-    }
-    return $pdo;
+$conn = new mysqli($host, $user, $password, $database, $port);
+
+if ($conn->connect_error) {
+    die("Database connection failed: " . $conn->connect_error);
 }
+?>

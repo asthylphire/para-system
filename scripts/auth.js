@@ -1,14 +1,26 @@
-// AUTH (talks to api/auth/*.php; the session lives on the server)
 const Auth = {
     user: null,
     _ready: null,
 
-    // Resolves once we know who (if anyone) is logged in
+   
+    _setUser(user) {
+        this.user = user || null;
+        try {
+            if (this.user) sessionStorage.setItem('para_user', JSON.stringify(this.user));
+            else sessionStorage.removeItem('para_user');
+        } catch (e) { /* storage unavailable */ }
+    },
+
+    
     ready() {
         if (!this._ready) {
             this._ready = API.session()
-                .then(res => { this.user = res.user || null; return this.user; })
-                .catch(err => { console.warn('[Auth] Could not load session:', err.message); this.user = null; return null; });
+                .then(res => { this._setUser(res.user); return this.user; })
+                .catch(err => {
+                    console.warn('[Auth] Could not load session:', err.message);
+                    this._setUser(null);
+                    return null;
+                });
         }
         return this._ready;
     },
@@ -19,20 +31,20 @@ const Auth = {
     async login(email, password) {
         const res = await API.post('auth/login.php', { email, password });
         API.csrf = res.csrf;
-        this.user = res.user;
+        this._setUser(res.user);
         return res;
     },
 
     async register(name, email, password) {
         const res = await API.post('auth/register.php', { name, email, password });
         API.csrf = res.csrf;
-        this.user = res.user;
+        this._setUser(res.user);
         return res;
     },
 
     async logout() {
         await API.post('auth/logout.php');
-        this.user = null;
+        this._setUser(null);
         await API.session(true).catch(() => {});   // fresh token for the new guest session
     }
 };

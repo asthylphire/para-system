@@ -36,7 +36,7 @@ const API = {
                 url: this.base + url, 
                 method: method, 
                 dataType: 'json', 
-                xhrFields: { withCredentials: true }, // <-- Add this line here
+                xhrFields: { withCredentials: true }, 
                 headers: {} 
             };
             if (method === 'GET') {

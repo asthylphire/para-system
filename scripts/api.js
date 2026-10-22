@@ -32,7 +32,13 @@ const API = {
 
     request(method, url, data) {
         return new Promise((resolve, reject) => {
-            const opts = { url: this.base + url, method: method, dataType: 'json', headers: {} };
+            const opts = { 
+                url: this.base + url, 
+                method: method, 
+                dataType: 'json', 
+                xhrFields: { withCredentials: true }, // <-- Add this line here
+                headers: {} 
+            };
             if (method === 'GET') {
                 opts.data = data;
             } else {

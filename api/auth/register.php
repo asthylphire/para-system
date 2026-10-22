@@ -27,4 +27,12 @@ try {
     throw $e;
 }
 
+$q = $pdo->prepare('SELECT id FROM users WHERE email =?');
+$q->execute([$email]);
+$id = (int) $q->fetchColumn();
+if ($id < 1) fail(500, 'Account was created but could not be loaded. Please log in.');
+
+session_regenerate_id(true);
+$_SESSION ['user_id'] = $id;
+
 ok(['user' => ['id' => $id, 'name' => $name, 'email' => $email], 'csrf' => csrf_token()], 201);

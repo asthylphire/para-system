@@ -1,5 +1,8 @@
 <?php
 function db() {
+    static $pdo = null;
+    if ($pdo !== null) return $pdo;
+
     $host     = getenv('DB_HOST') ?: '127.0.0.1';
     $user     = getenv('DB_USER') ?: 'root';
     $password = getenv('DB_PASS') ?: '';
@@ -14,6 +17,7 @@ function db() {
         ]);
         return $pdo;
     } catch (PDOException $e) {
+        error_log('DB connection failed: ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(["error" => "Database connection failed: " . $e->getMessage()]);
         exit;

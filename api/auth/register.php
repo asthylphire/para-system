@@ -16,16 +16,15 @@ if (strlen($password) < 8)                                               $errors
 elseif (strlen($password) > 72)                                          $errors['password'] = 'Password is too long (max 72 characters).';
 if ($errors) fail(422, 'Please fix the highlighted fields.', $errors);
 
+$pdo = db();
+
 try {
-    $s = db()->prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)');
+    $s = $pdo->prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)');
     $s->execute([$name, $email, password_hash($password, PASSWORD_DEFAULT)]);
+    $id = (int) $pdo->lastInsertId();
 } catch (PDOException $e) {
     if ((int)$e->errorInfo[1] === 1062) fail(409, 'Email already registered.');  // UNIQUE(email)
     throw $e;
 }
-
-session_regenerate_id(true);               // prevents session fixation
-$id = (int) db()->lastInsertId();
-$_SESSION['user_id'] = $id;
 
 ok(['user' => ['id' => $id, 'name' => $name, 'email' => $email], 'csrf' => csrf_token()], 201);

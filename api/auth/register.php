@@ -35,4 +35,5 @@ if ($id < 1) fail(500, 'Account was created but could not be loaded. Please log 
 session_regenerate_id(true);
 $_SESSION ['user_id'] = $id;
 
-ok(['user' => ['id' => $id, 'name' => $name, 'email' => $email], 'csrf' => csrf_token()], 201);
+ok(['user' => ['id' => $id, 'name' => $name, 'email' => $email], 'csrf' => csrf_token(),
+    'debug' => ['sid' => substr(session_id(), 0, 8), 'uid' => $_SESSION['user_id'] ?? null]], 201);
